@@ -34,7 +34,7 @@ const MODEL_MAPPING = {
     'kumo': 'nvidia/kumo-relational'
 };
 
-// Función principal del Proxy
+// Función principal del Proxy para procesar chats
 async function handleChatCompletion(req, res) {
   try {
     const { model, messages, temperature, max_tokens, stream } = req.body;
@@ -173,9 +173,14 @@ async function handleChatCompletion(req, res) {
   }
 }
 
-// 🔀 SOPORTE PARA TODAS LAS RUTAS (Evita el Error 404 de Janitor)
+// 🔀 RUTAS DE CHAT COMPATIBLES
 app.post('/v1/chat/completions', handleChatCompletion);
 app.post('/chat/completions', handleChatCompletion);
+
+// 🛠️ RESPUESTA PARA LA VALIDACIÓN DIRECTA DE JANITOR AI A /v1
+app.all('/v1', (req, res) => {
+  res.json({ status: 'ok', message: 'NVIDIA Proxy activo para Janitor AI' });
+});
 
 // Health check universal
 app.use((req, res, next) => {
@@ -185,7 +190,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// Catch-all genérico (Solo salta si no es un chat)
+// Catch-all genérico
 app.all('*', (req, res) => {
   res.status(404).json({
     error: { message: `Endpoint ${req.path} no encontrado en el proxy`, type: 'invalid_request_error', code: 404 }
