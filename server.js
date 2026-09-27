@@ -1,4 +1,4 @@
-// server.js - OpenAI to NVIDIA NIM API Proxy (Compatible con Janitor AI)
+// server.js - OpenAI to NVIDIA NIM API Proxy (Optimizado para Janitor AI)
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -6,7 +6,7 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// Middleware de seguridad para evitar bloqueos de red
 app.use(cors());
 app.use(express.json());
 
@@ -14,10 +14,7 @@ app.use(express.json());
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://nvidia.com';
 const NIM_API_KEY = process.env.NIM_API_KEY;
 
-const SHOW_REASONING = false; 
-const ENABLE_THINKING_MODE = false; 
-
-// Model mapping
+// Model mapping para conversión automática
 const MODEL_MAPPING = {
     'gpt-3.5-turbo': 'nvidia/llama-3.1-nemotron-ultra-253b-v1',
     'gpt-4': 'qwen/qwen3-coder-480b-a35b-instruct',
@@ -27,176 +24,108 @@ const MODEL_MAPPING = {
     'claude-3-sonnet': 'openai/gpt-oss-20b',
     'gemini-pro': 'qwen/qwen3-next-80b-a3b-thinking',
     
-    // Catálogo gratuito de NVIDIA
+    // Modelos gratuitos nativos de NVIDIA
     'glm-5-3': 'z-ai/glm-5-3',
     'glm-5-3-flash': 'z-ai/glm-5-3-flash',
     'deepseek-flash': 'deepseek-ai/deepseek-v4.1-flash',
     'kumo': 'nvidia/kumo-relational'
 };
 
-// Función principal del Proxy para procesar chats
+// Función para procesar la petición del chat
 async function handleChatCompletion(req, res) {
   try {
-    const { model, messages, temperature, max_tokens, stream } = req.body;
+    const { model, messages, temperature, max_tokens } = req.body;
     
-    let nimModel = MODEL_MAPPING[model];
-    if (!nimModel) {
-      try {
-        await axios.post(`${NIM_API_BASE}/chat/completions`, {
-          model: model,
-          messages: [{ role: 'user', content: 'test' }],
-          max_tokens: 1
-        }, {
-          headers: { 'Authorization': `Bearer ${NIM_API_KEY}`, 'Content-Type': 'application/json' },
-          validateStatus: (status) => status < 500
-        }).then(responseRes => {
-          if (responseRes.status >= 200 && responseRes.status < 300) {
-            nimModel = model;
-          }
-        });
-      } catch (e) {}
-      
-      if (!nimModel) {
-        const modelLower = model.toLowerCase();
-        if (modelLower.includes('gpt-4') || modelLower.includes('claude-opus') || modelLower.includes('405b')) {
-          nimModel = 'meta/llama-3.1-405b-instruct';
-        } else if (modelLower.includes('claude') || modelLower.includes('gemini') || modelLower.includes('70b')) {
-          nimModel = 'meta/llama-3.1-70b-instruct';
-        } else {
-          nimModel = 'meta/llama-3.1-8b-instruct';
-        }
-      }
-    }
+    let nimModel = MODEL_MAPPING[model] || model;
     
     const nimRequest = {
       model: nimModel,
       messages: messages,
       temperature: temperature || 0.6,
-      max_tokens: max_tokens || 9024,
-      extra_body: ENABLE_THINKING_MODE ? { chat_template_kwargs: { thinking: true } } : undefined,
-      stream: stream || false
+      max_tokens: max_tokens || 4096,
+      stream: false // Forzamos false internamente para evitar que se rompa el flujo de NVIDIA
     };
     
+    // Petición directa a la API de NVIDIA
     const response = await axios.post(`${NIM_API_BASE}/chat/completions`, nimRequest, {
       headers: {
         'Authorization': `Bearer ${NIM_API_KEY}`,
         'Content-Type': 'application/json'
-      },
-      responseType: stream ? 'stream' : 'json'
+      }
     });
     
-    if (stream) {
+    // Estructura de respuesta exacta compatible con OpenAI y Janitor AI
+    const openaiResponse = {
+      id: `chatcmpl-${Date.now()}`,
+      object: 'chat.completion',
+      created: Math.floor(Date.now() / 1000),
+      model: model,
+      choices: response.data.choices.map(choice => ({
+        index: choice.index,
+        message: { 
+          role: choice.message.role, 
+          content: choice.message.content || '' 
+        },
+        finish_reason: choice.finish_reason || 'stop'
+      })),
+      usage: response.data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+    };
+
+    // Si Janitor AI pidió streaming, simulamos un paquete de streaming compatible para que no falle
+    if (req.body.stream) {
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
       
-      let buffer = '';
-      let reasoningStarted = false;
-      
-      response.data.on('data', (chunk) => {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
-        lines.forEach(line => {
-          if (line.startsWith('data: ')) {
-            if (line.includes('[DONE]')) {
-              res.write(line + '\n');
-              return;
-            }
-            
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.choices?.[0]?.delta) {
-                const reasoning = data.choices[0].delta.reasoning_content;
-                const content = data.choices[0].delta.content;
-                
-                if (SHOW_REASONING) {
-                  let combinedContent = '';
-                  if (reasoning && !reasoningStarted) {
-                    combinedContent = '<think>\n' + reasoning;
-                    reasoningStarted = true;
-                  } else if (reasoning) {
-                    combinedContent = reasoning;
-                  }
-                  if (content && reasoningStarted) {
-                    combinedContent += '</think>\n\n' + content;
-                    reasoningStarted = false;
-                  } else if (content) {
-                    combinedContent += content;
-                  }
-                  if (combinedContent) {
-                    data.choices[0].delta.content = combinedContent;
-                    delete data.choices[0].delta.reasoning_content;
-                  }
-                } else {
-                  if (content) data.choices[0].delta.content = content;
-                  else data.choices[0].delta.content = '';
-                  delete data.choices[0].delta.reasoning_content;
-                }
-              }
-              res.write(`data: ${JSON.stringify(data)}\n\n`);
-            } catch (e) {
-              res.write(line + '\n');
-            }
-          }
-        });
-      });
-      
-      response.data.on('end', () => res.end());
-      response.data.on('error', (err) => res.end());
-    } else {
-      const openaiResponse = {
-        id: `chatcmpl-${Date.now()}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model: model,
-        choices: response.data.choices.map(choice => {
-          let fullContent = choice.message?.content || '';
-          if (SHOW_REASONING && choice.message?.reasoning_content) {
-            fullContent = '<think>\n' + choice.message.reasoning_content + '\n</think>\n\n' + fullContent;
-          }
-          return {
-            index: choice.index,
-            message: { role: choice.message.role, content: fullContent },
-            finish_reason: choice.finish_reason
-          };
-        }),
-        usage: response.data.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+      const chunk = {
+        id: openaiResponse.id,
+        object: 'chat.completion.chunk',
+        created: openaiResponse.created,
+        model: openaiResponse.model,
+        choices: [{
+          index: 0,
+          delta: { content: openaiResponse.choices[0].message.content },
+          finish_reason: 'stop'
+        }]
       };
-      res.json(openaiResponse);
+      
+      res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      res.write('data: [DONE]\n\n');
+      return res.end();
     }
+    
+    // Si no tiene streaming activo, responde normal
+    res.json(openaiResponse);
+    
   } catch (error) {
+    console.error('Error en el proxy:', error.message);
     res.status(error.response?.status || 500).json({
-      error: { message: error.message || 'Internal server error', type: 'invalid_request_error', code: error.response?.status || 500 }
+      error: { message: error.message || 'Error interno del servidor proxy', type: 'invalid_request_error', code: error.response?.status || 500 }
     });
   }
 }
 
-// 🔀 RUTAS DE CHAT COMPATIBLES
+// Configuración de rutas compatibles
 app.post('/v1/chat/completions', handleChatCompletion);
 app.post('/chat/completions', handleChatCompletion);
 
-// 🛠️ RESPUESTA PARA LA VALIDACIÓN DIRECTA DE JANITOR AI A /v1
 app.all('/v1', (req, res) => {
   res.json({ status: 'ok', message: 'NVIDIA Proxy activo para Janitor AI' });
 });
 
-// Health check universal
 app.use((req, res, next) => {
   if (req.path === '/health' || req.path === '/v1/health') {
-    return res.json({ status: 'ok', service: 'Proxy Adaptado para Janitor AI' });
+    return res.json({ status: 'ok', service: 'Proxy adaptado' });
   }
   next();
 });
 
-// Catch-all genérico
 app.all('*', (req, res) => {
   res.status(404).json({
-    error: { message: `Endpoint ${req.path} no encontrado en el proxy`, type: 'invalid_request_error', code: 404 }
+    error: { message: `Ruta ${req.path} no encontrada`, type: 'invalid_request_error', code: 404 }
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`Proxy listo en puerto ${PORT}`);
+  console.log(`Proxy corriendo en puerto ${PORT}`);
 });
