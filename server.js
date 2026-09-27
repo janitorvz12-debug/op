@@ -15,7 +15,9 @@ app.use(express.json({ limit: '10mb' }));
 
 // OJO: la URL base real de la API es integrate.api.nvidia.com/v1, NO nvidia.com
 const NIM_API_BASE = process.env.NIM_API_BASE || 'https://integrate.api.nvidia.com/v1';
-const NIM_API_KEY = process.env.NIM_API_KEY;
+// Aceptamos cualquiera de los dos nombres de variable, por si en Render
+// quedó configurada como NVIDIA_API_KEY en vez de NIM_API_KEY.
+const NIM_API_KEY = process.env.NIM_API_KEY || process.env.NVIDIA_API_KEY;
 
 // Validación al arrancar: si falta la API key, avisamos fuerte en los logs
 // en vez de fallar en silencio en cada request.
@@ -45,6 +47,10 @@ const MODEL_MAPPING = {
   'claude-3-opus': 'openai/gpt-oss-120b',
   'claude-3-sonnet': 'openai/gpt-oss-20b',
   'gemini-pro': 'qwen/qwen3-next-80b-a3b-thinking',
+
+  // Modelos GLM (Z.ai) - confirmados en el catálogo de build.nvidia.com
+  'glm-5-3': 'z-ai/glm-5-3',
+  'glm-5.1': 'z-ai/glm5.1',
 };
 
 // ---------------------------------------------------------------------------
