@@ -32,7 +32,7 @@ const nimClient = axios.create({
     'Authorization': `Bearer ${NIM_API_KEY}`,
     'Content-Type': 'application/json'
   },
-  timeout: 60_000 // 60s
+  timeout: 180_000 // 180s: modelos grandes (GLM-5.3) + cold start del free tier de Render pueden tardar
 });
 
 // Model mapping para conversión automática.
