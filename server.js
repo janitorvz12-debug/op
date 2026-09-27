@@ -96,6 +96,7 @@ async function handleChatCompletion(req, res) {
   }
 
   const nimModel = MODEL_MAPPING[model] || model;
+  console.log(`[${new Date().toISOString()}] Modelo pedido por el cliente: "${model}" -> enviando a NVIDIA como: "${nimModel}"`);
 
   const nimRequest = {
     model: nimModel,
