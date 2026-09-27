@@ -163,6 +163,10 @@ async function handleChatCompletion(req, res) {
 
 app.post('/v1/chat/completions', handleChatCompletion);
 app.post('/chat/completions', handleChatCompletion);
+// Algunos clientes (como Janitor AI en ciertas configuraciones) postean
+// directo a la URL base que les diste, sin agregar /chat/completions.
+app.post('/v1', handleChatCompletion);
+app.post('/', handleChatCompletion);
 
 // Algunos clientes (y a veces Janitor) consultan /v1/models antes de chatear.
 // Devolvemos al menos las claves de nuestro mapping para que esa llamada no falle.
