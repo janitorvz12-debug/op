@@ -48,8 +48,9 @@ const MODEL_MAPPING = {
   'claude-3-sonnet': 'openai/gpt-oss-20b',
   'gemini-pro': 'qwen/qwen3-next-80b-a3b-thinking',
 
-  // Modelos GLM (Z.ai) - confirmados en el catálogo de build.nvidia.com
-  'glm-5-3': 'z-ai/glm-5-3',
+  // Modelos GLM (Z.ai) - slugs de API confirmados en la documentación oficial de NVIDIA NIM
+  // (ojo: la página web usa guiones en la URL, pero el "model" real de la API lleva punto)
+  'glm-5.3': 'z-ai/glm-5.3',
   'glm-5.1': 'z-ai/glm5.1',
 };
 
