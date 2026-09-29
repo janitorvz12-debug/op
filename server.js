@@ -6,6 +6,17 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Red de seguridad: si algo se nos escapa sin capturar en algún lado del
+// código, lo logueamos en vez de dejar que tumbe todo el proceso (que
+// cortaría de golpe cualquier conversación en curso, apareciendo como
+// "network error" del lado de Janitor sin ninguna razón aparente).
+process.on('uncaughtException', (err) => {
+  console.error(`[${new Date().toISOString()}] [uncaughtException] El proceso casi se cae por:`, err.message, err.stack);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error(`[${new Date().toISOString()}] [unhandledRejection] Promesa rechazada sin capturar:`, reason);
+});
+
 // ---------------------------------------------------------------------------
 // Configuración
 // ---------------------------------------------------------------------------
@@ -150,7 +161,7 @@ async function handleChatCompletion(req, res) {
         } catch (err) {
           if (retriesLeft > 0 && !clientClosedFirst) {
             console.log(`[${new Date().toISOString()}] Falló al iniciar el streaming, reintentando... (${err.message})`);
-            return attemptStream(retriesLeft - 1);
+            return attemptStream(retriesLeft - 1).catch((e) => console.error('Error en reintento:', e.message));
           }
           clearInterval(heartbeat);
           console.error(`[${new Date().toISOString()}] Error iniciando streaming:`, err.message);
@@ -174,7 +185,7 @@ async function handleChatCompletion(req, res) {
           if (bytesReceived === 0 && retriesLeft > 0) {
             // NVIDIA cortó antes de mandar nada: reintentamos sin que el cliente se entere.
             console.log(`[${new Date().toISOString()}] NVIDIA cortó la conexión sin enviar datos, reintentando... (${err.message})`);
-            return attemptStream(retriesLeft - 1);
+            return attemptStream(retriesLeft - 1).catch((e) => console.error('Error en reintento:', e.message));
           }
           console.error(`[${new Date().toISOString()}] Error inesperado durante el streaming (posible corte del lado de NVIDIA):`, err.message, `| bytes recibidos antes del corte: ${bytesReceived}`);
           res.end();
@@ -252,4 +263,3 @@ app.listen(PORT, () => {
   console.log(`NIM_API_BASE = ${NIM_API_BASE}`);
   console.log(`NIM_API_KEY configurada: ${NIM_API_KEY ? 'sí' : 'NO (falta configurarla)'}`);
 });
-      
