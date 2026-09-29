@@ -121,14 +121,22 @@ async function handleChatCompletion(req, res) {
 
       nimResponse.data.pipe(res);
 
-      nimResponse.data.on('error', (err) => {
-        console.error('Error durante el streaming:', err.message);
-        res.end();
+      // Si el propio cliente (Janitor) cierra la conexión (cancela, regenera,
+      // etc.), lo marcamos para no reportar el corte como un error real.
+      let clientClosedFirst = false;
+      req.on('close', () => {
+        clientClosedFirst = true;
+        nimResponse.data.destroy();
       });
 
-      req.on('close', () => {
-        // Si el cliente (Janitor) corta la conexión, cortamos también hacia NVIDIA
-        nimResponse.data.destroy();
+      nimResponse.data.on('error', (err) => {
+        if (clientClosedFirst || err.message === 'aborted') {
+          // Corte normal: el usuario canceló/regeneró el mensaje en Janitor.
+          console.log(`[${new Date().toISOString()}] Streaming cortado por el cliente (cancelado/regenerado), no es un error.`);
+        } else {
+          console.error(`[${new Date().toISOString()}] Error inesperado durante el streaming:`, err.message);
+        }
+        res.end();
       });
 
       return;
