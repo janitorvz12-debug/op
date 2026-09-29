@@ -134,41 +134,56 @@ async function handleChatCompletion(req, res) {
         try { res.write(': keep-alive\n\n'); } catch (_) { /* conexión ya cerrada */ }
       }, 15_000);
 
-      let nimResponse;
-      try {
-        nimResponse = await nimClient.post('/chat/completions', nimRequest, {
-          headers: { 'Accept': 'text/event-stream' },
-          responseType: 'stream'
+      // Si el propio cliente (Janitor) cierra la conexión (cancela, regenera,
+      // etc.), lo marcamos para no reportar el corte como un error real ni
+      // reintentar innecesariamente.
+      let clientClosedFirst = false;
+      req.on('close', () => { clientClosedFirst = true; });
+
+      async function attemptStream(retriesLeft) {
+        let nimResponse;
+        try {
+          nimResponse = await nimClient.post('/chat/completions', nimRequest, {
+            headers: { 'Accept': 'text/event-stream' },
+            responseType: 'stream'
+          });
+        } catch (err) {
+          if (retriesLeft > 0 && !clientClosedFirst) {
+            console.log(`[${new Date().toISOString()}] Falló al iniciar el streaming, reintentando... (${err.message})`);
+            return attemptStream(retriesLeft - 1);
+          }
+          clearInterval(heartbeat);
+          console.error(`[${new Date().toISOString()}] Error iniciando streaming:`, err.message);
+          res.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
+          return res.end();
+        }
+
+        let bytesReceived = 0;
+        nimResponse.data.on('data', (chunk) => {
+          bytesReceived += chunk.length;
+          clearInterval(heartbeat); // ya llegó contenido real, no hace falta más heartbeat
         });
-      } catch (err) {
-        clearInterval(heartbeat);
-        // Los headers ya se mandaron, así que avisamos el error como evento SSE
-        console.error(`[${new Date().toISOString()}] Error iniciando streaming:`, err.message);
-        res.write(`data: ${JSON.stringify({ error: { message: err.message, type: 'invalid_request_error' } })}\n\n`);
-        return res.end();
+
+        req.on('close', () => { nimResponse.data.destroy(); });
+
+        nimResponse.data.on('error', (err) => {
+          if (clientClosedFirst) {
+            console.log(`[${new Date().toISOString()}] Streaming cortado por el cliente (cancelado/regenerado), no es un error.`);
+            return res.end();
+          }
+          if (bytesReceived === 0 && retriesLeft > 0) {
+            // NVIDIA cortó antes de mandar nada: reintentamos sin que el cliente se entere.
+            console.log(`[${new Date().toISOString()}] NVIDIA cortó la conexión sin enviar datos, reintentando... (${err.message})`);
+            return attemptStream(retriesLeft - 1);
+          }
+          console.error(`[${new Date().toISOString()}] Error inesperado durante el streaming (posible corte del lado de NVIDIA):`, err.message, `| bytes recibidos antes del corte: ${bytesReceived}`);
+          res.end();
+        });
+
+        nimResponse.data.pipe(res);
       }
 
-      clearInterval(heartbeat);
-      nimResponse.data.pipe(res);
-
-      // Si el propio cliente (Janitor) cierra la conexión (cancela, regenera,
-      // etc.), lo marcamos para no reportar el corte como un error real.
-      let clientClosedFirst = false;
-      req.on('close', () => {
-        clientClosedFirst = true;
-        nimResponse.data.destroy();
-      });
-
-      nimResponse.data.on('error', (err) => {
-        if (clientClosedFirst || err.message === 'aborted') {
-          // Corte normal: el usuario canceló/regeneró el mensaje en Janitor.
-          console.log(`[${new Date().toISOString()}] Streaming cortado por el cliente (cancelado/regenerado), no es un error.`);
-        } else {
-          console.error(`[${new Date().toISOString()}] Error inesperado durante el streaming:`, err.message);
-        }
-        res.end();
-      });
-
+      await attemptStream(1); // hasta 1 reintento automático si falla sin haber mandado contenido
       return;
     }
 
@@ -237,3 +252,4 @@ app.listen(PORT, () => {
   console.log(`NIM_API_BASE = ${NIM_API_BASE}`);
   console.log(`NIM_API_KEY configurada: ${NIM_API_KEY ? 'sí' : 'NO (falta configurarla)'}`);
 });
+      
