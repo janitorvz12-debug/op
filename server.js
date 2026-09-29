@@ -107,6 +107,17 @@ async function handleChatCompletion(req, res) {
     stream: Boolean(stream)
   };
 
+  // Algunos modelos (GLM, Qwen3, Nemotron, etc.) traen "thinking" activado
+  // por defecto, lo que agrega una pausa larga antes del primer token visible
+  // y puede hacer que Janitor/Render corten la conexión por inactividad.
+  // Lo desactivamos por defecto para roleplay (más rápido y sin cortes),
+  // pero el cliente puede forzarlo mandando su propio chat_template_kwargs.
+  if (req.body.chat_template_kwargs) {
+    nimRequest.chat_template_kwargs = req.body.chat_template_kwargs;
+  } else if (/glm|qwen|nemotron/i.test(nimModel)) {
+    nimRequest.chat_template_kwargs = { enable_thinking: false };
+  }
+
   try {
     if (stream) {
       // --- Streaming real: reenviamos el stream de NVIDIA tal cual llega ---
